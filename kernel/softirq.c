@@ -181,6 +181,8 @@ EXPORT_SYMBOL(__local_bh_enable_ip);
  * certain cases, such as stop_machine(), jiffies may cease to
  * increment and so we need the MAX_SOFTIRQ_RESTART limit as
  * well to make sure we eventually return from this method.
+ * We restart softirq processing for at most 2 ms,
+ * and if need_resched() is not set.
  *
  * These limits have been established via experimentation.
  * The two things to balance is latency against fairness -
@@ -188,7 +190,6 @@ EXPORT_SYMBOL(__local_bh_enable_ip);
  * should not be able to lock up the box.
  */
 #define MAX_SOFTIRQ_TIME  msecs_to_jiffies(2)
-#define MAX_SOFTIRQ_RESTART 10
 
 #ifdef CONFIG_TRACE_IRQFLAGS
 /*
@@ -231,14 +232,8 @@ asmlinkage __visible void __do_softirq(void)
 	struct softirq_action *h;
 	bool in_hardirq;
 	__u32 pending;
-	int softirq_bit;
-
-	/*
-	 * Mask out PF_MEMALLOC s current task context is borrowed for the
-	 * softirq. A softirq handled such as network RX might set PF_MEMALLOC
-	 * again if the socket is related to swap
-	 */
-	current->flags &= ~PF_MEMALLOC;
+	unsigned long end = jiffies + MAX_SOFTIRQ_TIME;
+	int cpu;
 
 	pending = local_softirq_pending();
 	account_irq_enter_time(current);
@@ -283,8 +278,7 @@ restart:
 
 	pending = local_softirq_pending();
 	if (pending) {
-		if (time_before(jiffies, end) && !need_resched() &&
-		    --max_restart)
+		if (time_before(jiffies, end) && !need_resched())
 			goto restart;
 
 		wakeup_softirqd();
